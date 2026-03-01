@@ -101,7 +101,7 @@ dependencies {
 test {
     useJUnitPlatform()
     systemProperty 'junit.jupiter.extensions.autodetection.enabled', 'true'
-    
+
     // Add this block so the AI can read test failures in the terminal!
     testLogging {
         events "failed", "standard_error"

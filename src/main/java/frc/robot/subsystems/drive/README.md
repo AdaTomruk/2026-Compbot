@@ -59,37 +59,37 @@ The subsystem uses the AdvantageKit IO pattern to support real hardware, alterna
 ```mermaid
 stateDiagram-v2
     [*] --> TELEOP
-    
+
     TELEOP --> TELEOP: Field-centric joystick input
     TELEOP --> ANGLE_LOCK: Heading lock requested
     TELEOP --> CHARACTERIZATION: SysId / Characterization start
     TELEOP --> STOPPED: Disable/e-stop
-    
+
     ANGLE_LOCK --> ANGLE_LOCK: Maintain heading angle
     ANGLE_LOCK --> TELEOP: Free heading
     ANGLE_LOCK --> STOPPED: Disable
-    
+
     CHARACTERIZATION --> TELEOP: Characterization complete
     CHARACTERIZATION --> STOPPED: Disable
-    
+
     STOPPED --> TELEOP: Re-enable
     STOPPED --> [*]
-    
+
     note right of TELEOP
         Default command, accepts joystick input
         Runs field-centric or robot-centric
     end note
-    
+
     note right of ANGLE_LOCK
         Field-centric with PID heading lock
         Useful for aiming autonomous rotations
     end note
-    
+
     note right of CHARACTERIZATION
         SysId or wheel radius characterization
         Motors driven with known inputs
     end note
-    
+
     note right of STOPPED
         Brake mode enabled, no inputs accepted
         Module angles neutral
@@ -106,26 +106,26 @@ sequenceDiagram
     participant IO as ModuleIO<br/>(Hardware/Sim)
     participant Gyro as GyroIO
     participant ODO as PhoenixOdometryThread
-    
+
     RC->>Drive: instantiate Drive()
     Drive->>Module: create 4 Module instances
     Module->>IO: instantiate ModuleIO (Real/Sim)
     Drive->>Gyro: instantiate GyroIO
     Drive->>ODO: start PhoenixOdometryThread
-    
+
     Note over RC,ODO: Teleoperated Drive
     RC->>CMD: joystickDrive(xSupplier, ySupplier, omegaSupplier)
     CMD->>Drive: execute() each iteration
     Drive->>Module: setDesiredState(SwerveModuleState)
     Module->>IO: setDriveVoltage() / setSteerVoltage()
     IO->>IO: apply to TalonFX motors (or simulation)
-    
+
     par Odometry Updates (250 Hz)
         ODO->>IO: sample drive position/velocity
         ODO->>Gyro: sample yaw angle
         ODO->>Drive: updateOdometry(modulePositions, gyroYaw)
     end
-    
+
     Drive->>Drive: update Pose2d via kinematics
 ```
 
@@ -133,23 +133,23 @@ sequenceDiagram
 The Drive subsystem exposes driving and characterization commands through the `DriveCommands` factory class:
 
 ### Teleoperated Driving
-- **`joystickDrive(drive, xSupplier, ySupplier, omegaSupplier)`**  
+- **`joystickDrive(drive, xSupplier, ySupplier, omegaSupplier)`**
   Field-centric teleoperated drive with joystick inputs. Robot moves relative to field orientation.
 
-- **`joystickDriveAtAngle(drive, xSupplier, ySupplier, rotationSupplier)`**  
+- **`joystickDriveAtAngle(drive, xSupplier, ySupplier, rotationSupplier)`**
   Field-centric drive with PID-maintained heading angle. Useful for consistent autonomous-like rotations during teleop.
 
 ### Characterization & Testing
-- **`wheelRadiusCharacterization(drive)`**  
+- **`wheelRadiusCharacterization(drive)`**
   Characterization routine to determine actual wheel radius by driving in a circle and measuring encoder counts.
 
-- **`feedforwardCharacterization(drive)`**  
+- **`feedforwardCharacterization(drive)`**
   SysId-style feedforward characterization to identify drive motor kS and kV constants.
 
-- **`sysIdQuasistatic(drive, direction)`**  
+- **`sysIdQuasistatic(drive, direction)`**
   SysId quasistatic test (slow voltage ramp) for system identification in specified direction (forward/backward).
 
-- **`sysIdDynamic(drive, direction)`**  
+- **`sysIdDynamic(drive, direction)`**
   SysId dynamic test (fast voltage step) for system identification in specified direction (forward/backward).
 
 ## 🧪 Testing & Simulation Requirements

@@ -59,14 +59,14 @@ graph TB
         Commands["Commands"]
         Logger["AdvantageKit Logger"]
     end
-    
+
     IO -->|injected at runtime| RealImpl
     IO -->|injected at runtime| SimImpl
     Subsystem -->|uses abstracted| IO
     Subsystem -->|publishes| Logger
     Commands -->|actuate| Subsystem
     Logger -->|logs to USB or NT4| Storage["USB Log / NT4 Publisher"]
-    
+
     style IO fill:#4A90E2
     style RealImpl fill:#50C878
     style SimImpl fill:#FFB347
