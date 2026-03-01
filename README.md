@@ -1,1 +1,1 @@
-Code for 2026 seasone of 10234
+Code for 2026 season of 10234
