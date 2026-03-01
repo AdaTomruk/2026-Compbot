@@ -1,4 +1,163 @@
-# Turret Subsystem Implementation Plan
+# Turret Subsystem — Implementation, Fixes & Enhancements
+
+## Overview
+
+Fix five critical bugs in the existing `TurretSubsystem` IO stack and add competition-ready features including `Mechanism2d` AdvantageScope 2D logging, `Pose3d` 3D logging, and a `retryCRTResolveCommand()` API.
+
+The turret uses a Kraken X60 driving an 85-tooth main gear through a two-stage gear reduction. Absolute position is resolved via two CANcoders on coprime pinions (10t and 17t) using YAMS `EasyCRT` — giving a CRT unique coverage of 720°.
+
+---
+
+## Flow
+
+### Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Hardware["TurretIOKraken (Real)"]
+        A[TalonFX Motor CAN 20] --> B[MotionMagicVoltage position request]
+        C[CANcoder 10t CAN 21] --> D[EasyCRT resolution]
+        E[CANcoder 17t CAN 22] --> D
+        D --> F[Absolute turret angle degrees]
+        F --> G[Seed TalonFX relativePosition on boot]
+    end
+
+    subgraph Sim["TurretIOSim"]
+        H[DCMotorSim Gearbox+Inertia] --> I[turretSim applyVoltage]
+        J[PIDController SIM-scaled gains] --> I
+        I --> K[angularPosition read directly]
+    end
+
+    subgraph Subsystem["TurretSubsystem"]
+        L[io.updateInputs] --> M[Logger.processInputs]
+        M --> N[Alert checks]
+        N --> O[Mechanism2d update]
+        O --> P[Pose3d log]
+    end
+
+    Hardware --> Subsystem
+    Sim --> Subsystem
+```
+
+### State Diagram — Boot / CRT Resolve
+
+```mermaid
+stateDiagram-v2
+    [*] --> WaitingForSignals : Robot init
+    WaitingForSignals --> ResolvingCRT : All CANcoder signals valid debounced
+    ResolvingCRT --> Resolved : EasyCRT returns valid angle
+    ResolvingCRT --> ResolveFailed : EasyCRT returns empty / error
+    ResolveFailed --> ResolvingCRT : retryCRTResolveCommand triggered
+    Resolved --> Running : TalonFX seeded
+    Running --> Running : periodic position control
+```
+
+### Command API Sequence
+
+```mermaid
+sequenceDiagram
+    participant RC as RobotContainer
+    participant TS as TurretSubsystem
+    participant IO as TurretIO impl
+
+    RC->>TS: setAbsoluteOrientationCommand(angleDeg)
+    TS->>TS: targetAngleDeg = angleDeg
+    TS->>IO: setTargetAngleDeg(targetAngleDeg)
+
+    RC->>TS: setRelativeOrientationCommand(deltaDeg)
+    TS->>TS: targetAngleDeg += deltaDeg
+    TS->>IO: setTargetAngleDeg(targetAngleDeg)
+
+    RC->>TS: retryCRTResolveCommand()
+    TS->>IO: triggerCRTResolve()
+    IO-->>TS: crtResolveSucceeded next cycle
+```
+
+---
+
+## Requirements
+
+### Functional
+- `getOrientationDeg()` returns current measured turret angle in degrees.
+- `setAbsoluteOrientationCommand(double angleDeg)` moves turret to an absolute angle.
+- `setRelativeOrientationCommand(double deltaDeg)` offsets current target by deltaDeg.
+- `retryCRTResolveCommand()` re-triggers CRT resolution without rebooting.
+- `targetAngleDeg` is seeded from the CRT-resolved angle on first successful boot resolve.
+- AdvantageScope 2D visualization via `Mechanism2d` logged to `Turret/Mechanism2d`.
+- AdvantageScope 3D visualization via `Pose3d` logged under `Turret/Pose3d`.
+
+### Bug Fixes
+1. **Sim double gear-ratio:** `TurretIOSim.updateInputs` must NOT divide `getAngularPositionRad()` by `MOTOR_TO_TURRET_RATIO` — `DCMotorSim` with the ratio already outputs mechanism-side values.
+2. **Sim PID scaling:** Use `SIM_kP / SIM_kI / SIM_kD` constants (voltage-domain tuned) instead of hardware gains.
+3. **Boot race condition:** `TurretIOKraken` must call `BaseStatusSignal.waitForAll(0.25, ...)` for both CANcoder signals before calling `EasyCRT`.
+4. **Uninitialized target angle:** On first `crtResolveSucceeded`, set `targetAngleDeg = inputs.crtResolvedAngleDeg`.
+5. **Missing visualization:** Add `Mechanism2d` ligament angle logging and `Pose3d` yaw logging in `TurretSubsystem.periodic()`.
+
+---
+
+## Implementation Steps
+
+### `Constants.java` — `TurretConstants`
+Add:
+```java
+public static final double SIM_kP = 8.0;
+public static final double SIM_kI = 0.0;
+public static final double SIM_kD = 0.0;
+public static final double MECHANISM_LENGTH_METERS = 0.3;
+public static final Translation3d POSE3D_OFFSET = new Translation3d(0.0, 0.0, 0.25);
+```
+
+### `TurretIO.java`
+Add:
+```java
+public default void triggerCRTResolve() {}
+```
+
+### `TurretIOKraken.java`
+- Add `private boolean needsCRTResolve = false;` field.
+- After constructing CANcoders, call `BaseStatusSignal.waitForAll(0.25, absolutePosition10t, absolutePosition17t)` before EasyCRT.
+- If not OK, set `needsCRTResolve = true` instead of running CRT.
+- In `updateInputs`, if `needsCRTResolve`, retry EasyCRT when signals are fresh.
+- Implement `triggerCRTResolve()` to set `needsCRTResolve = true` and `motorSeeded = false`.
+
+### `TurretIOSim.java`
+- Change `new PIDController(TurretConstants.kP, TurretConstants.kI, TurretConstants.kD)` to use `SIM_kP/kI/kD`.
+- In `updateInputs`, change position read from `turretSim.getAngularPositionRad() / MOTOR_TO_TURRET_RATIO * (180/PI)` to `turretSim.getAngularPositionRad() * (180/PI)`.
+- In `updateInputs`, change velocity read similarly (no ratio division).
+- Implement `triggerCRTResolve()` to set `inputs.crtResolveSucceeded = true` with current sim position.
+
+### `TurretSubsystem.java`
+- Add `private boolean targetSeeded = false;` field.
+- In `periodic()`, after `Logger.processInputs`: if `!targetSeeded && inputs.crtResolveSucceeded` → `targetAngleDeg = inputs.crtResolvedAngleDeg; targetSeeded = true;`
+- Add Mechanism2d fields and update in periodic.
+- Add Pose3d logging in periodic.
+- Add `retryCRTResolveCommand()` method.
+- Add `getOrientationDeg()` method returning `inputs.turretPositionDeg`.
+
+---
+
+## Testing
+
+| Test | Verification Criteria |
+|------|----------------------|
+| Sim position reads correctly | `turretPositionDeg` changes with setpoint without ratio double-count |
+| Sim PID stability | Step response settles without oscillation with SIM_kP gains |
+| CRT seed on boot | `targetAngleDeg` equals `crtResolvedAngleDeg` after first resolve |
+| Relative command | `setRelativeOrientationCommand(+45)` from 90° yields target of 135° |
+| Retry CRT command | `retryCRTResolveCommand()` clears `targetSeeded`, re-runs IO resolve |
+| Mechanism2d logging | AdvantageScope shows Mechanism2d entry updating with turret angle |
+| Pose3d logging | AdvantageScope 3D shows turret yaw marker rotating with angle |
+
+---
+
+## Tech Stack
+
+| Library | Version | Usage |
+|---------|---------|-------|
+| WPILib | 2026.2.1 | `Mechanism2d`, `DCMotorSim`, `PIDController`, `Pose3d`, `Rotation3d`, `Translation3d` |
+| AdvantageKit | akit-autolog | `@AutoLog`, `Logger.processInputs`, `Logger.recordOutput` |
+| CTRE Phoenix 6 | vendordep | `TalonFX`, `CANcoder`, `BaseStatusSignal.waitForAll`, `MotionMagicVoltage` |
+| YAMS EasyCRT | vendordep | Chinese Remainder Theorem absolute position resolver |
 
 ## Overview
 

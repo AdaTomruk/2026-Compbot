@@ -7,6 +7,7 @@
 
 package frc.robot;
 
+import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.wpilibj.RobotBase;
 
 /**
@@ -49,5 +50,10 @@ public final class Constants {
     public static final double SOFT_LIMIT_MIN_DEG = -180.0;
     public static final double SOFT_LIMIT_MAX_DEG = 180.0;
     public static final double TURRET_INERTIA_KG_M2 = 0.001; // TODO: measure or estimate for sim
+    public static final double SIM_kP = 8.0;
+    public static final double SIM_kI = 0.0;
+    public static final double SIM_kD = 0.0;
+    public static final double MECHANISM_LENGTH_METERS = 0.3;
+    public static final Translation3d POSE3D_OFFSET = new Translation3d(0.0, 0.0, 0.25);
   }
 }

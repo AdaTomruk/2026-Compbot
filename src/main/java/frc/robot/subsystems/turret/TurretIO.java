@@ -28,4 +28,6 @@ public interface TurretIO {
   public default void updateInputs(TurretIOInputs inputs) {}
 
   public default void setTargetAngleDeg(double angleDeg) {}
+
+  public default void triggerCRTResolve() {}
 }

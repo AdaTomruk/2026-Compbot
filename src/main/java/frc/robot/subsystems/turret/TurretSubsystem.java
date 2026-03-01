@@ -7,16 +7,28 @@
 
 package frc.robot.subsystems.turret;
 
+import edu.wpi.first.math.geometry.Pose3d;
+import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import frc.robot.Constants.TurretConstants;
 import org.littletonrobotics.junction.Logger;
+import org.littletonrobotics.junction.mechanism.LoggedMechanism2d;
+import org.littletonrobotics.junction.mechanism.LoggedMechanismLigament2d;
+import org.littletonrobotics.junction.mechanism.LoggedMechanismRoot2d;
 
 public class TurretSubsystem extends SubsystemBase {
   private final TurretIO io;
   private final TurretIOInputsAutoLogged inputs = new TurretIOInputsAutoLogged();
+
+  private final LoggedMechanism2d mechanism = new LoggedMechanism2d(3, 3);
+  private final LoggedMechanismRoot2d root = mechanism.getRoot("TurretRoot", 1.5, 1.5);
+  private final LoggedMechanismLigament2d turretLigament =
+      root.append(
+          new LoggedMechanismLigament2d("Turret", TurretConstants.MECHANISM_LENGTH_METERS, 0));
 
   private final Alert motorDisconnectedAlert =
       new Alert("Turret motor disconnected.", AlertType.kError);
@@ -28,6 +40,7 @@ public class TurretSubsystem extends SubsystemBase {
       new Alert("Turret CRT resolve failed — position may be incorrect.", AlertType.kError);
 
   private double targetAngleDeg = 0.0;
+  private boolean targetSeeded = false;
 
   public TurretSubsystem(TurretIO io) {
     this.io = io;
@@ -37,6 +50,19 @@ public class TurretSubsystem extends SubsystemBase {
   public void periodic() {
     io.updateInputs(inputs);
     Logger.processInputs("Turret", inputs);
+
+    if (!targetSeeded && inputs.crtResolveSucceeded) {
+      targetAngleDeg = inputs.crtResolvedAngleDeg;
+      targetSeeded = true;
+    }
+
+    turretLigament.setAngle(inputs.turretPositionDeg);
+    Logger.recordOutput("Turret/Mechanism2d", mechanism);
+    Logger.recordOutput(
+        "Turret/Pose3d",
+        new Pose3d(
+            TurretConstants.POSE3D_OFFSET,
+            new Rotation3d(0, 0, Math.toRadians(inputs.turretPositionDeg))));
 
     motorDisconnectedAlert.set(!inputs.motorConnected);
     cancoder10tDisconnectedAlert.set(!inputs.cancoder10tConnected);
@@ -64,5 +90,19 @@ public class TurretSubsystem extends SubsystemBase {
 
   public double getTargetAngleDeg() {
     return targetAngleDeg;
+  }
+
+  public double getOrientationDeg() {
+    return inputs.turretPositionDeg;
+  }
+
+  public Command retryCRTResolveCommand() {
+    return Commands.runOnce(
+            () -> {
+              targetSeeded = false;
+              io.triggerCRTResolve();
+            },
+            this)
+        .withName("Turret.retryCRTResolve");
   }
 }

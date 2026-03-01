@@ -19,7 +19,7 @@ public class TurretIOSim implements TurretIO {
 
   private final DCMotorSim turretSim;
   private final PIDController controller =
-      new PIDController(TurretConstants.kP, TurretConstants.kI, TurretConstants.kD);
+      new PIDController(TurretConstants.SIM_kP, TurretConstants.SIM_kI, TurretConstants.SIM_kD);
 
   private double targetAngleDeg = 0.0;
   private double appliedVolts = 0.0;
@@ -45,14 +45,8 @@ public class TurretIOSim implements TurretIO {
     turretSim.setInputVoltage(appliedVolts);
     turretSim.update(0.02);
 
-    double turretPositionDeg =
-        turretSim.getAngularPositionRad()
-            / TurretConstants.MOTOR_TO_TURRET_RATIO
-            * (180.0 / Math.PI);
-    double turretVelocityDegPerSec =
-        turretSim.getAngularVelocityRadPerSec()
-            / TurretConstants.MOTOR_TO_TURRET_RATIO
-            * (180.0 / Math.PI);
+    double turretPositionDeg = turretSim.getAngularPositionRad() * (180.0 / Math.PI);
+    double turretVelocityDegPerSec = turretSim.getAngularVelocityRadPerSec() * (180.0 / Math.PI);
     double turretPositionRot = turretPositionDeg / 360.0;
 
     inputs.motorConnected = true;
@@ -71,5 +65,11 @@ public class TurretIOSim implements TurretIO {
   @Override
   public void setTargetAngleDeg(double angleDeg) {
     targetAngleDeg = angleDeg;
+  }
+
+  @Override
+  public void triggerCRTResolve() {
+    // In simulation, CRT is always immediately resolvable
+    // The next updateInputs cycle will re-set crtResolveSucceeded = true automatically
   }
 }

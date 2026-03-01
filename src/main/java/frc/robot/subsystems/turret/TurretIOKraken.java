@@ -11,6 +11,7 @@ import static edu.wpi.first.units.Units.*;
 import static frc.robot.util.PhoenixUtil.*;
 
 import com.ctre.phoenix6.BaseStatusSignal;
+import com.ctre.phoenix6.StatusCode;
 import com.ctre.phoenix6.StatusSignal;
 import com.ctre.phoenix6.configs.CANcoderConfiguration;
 import com.ctre.phoenix6.configs.TalonFXConfiguration;
@@ -54,8 +55,10 @@ public class TurretIOKraken implements TurretIO {
   private final Debouncer cancoder17tConnectedDebounce =
       new Debouncer(0.5, Debouncer.DebounceType.kFalling);
 
-  private final boolean crtResolveSucceeded;
-  private final double crtResolvedAngleDeg;
+  private boolean crtResolveSucceeded = false;
+  private double crtResolvedAngleDeg = 0.0;
+  private boolean needsCRTResolve = true;
+  private boolean motorSeeded = false;
 
   public TurretIOKraken() {
     motor = new TalonFX(TurretConstants.MOTOR_CAN_ID, TunerConstants.kCANBus);
@@ -108,36 +111,45 @@ public class TurretIOKraken implements TurretIO {
     ParentDevice.optimizeBusUtilizationForAll(motor, cancoder10t, cancoder17t);
 
     // Fresh CANcoder reads for CRT (done once at construction)
-    cancoder10t.getAbsolutePosition().refresh();
-    cancoder17t.getAbsolutePosition().refresh();
+    var status10t = cancoder10tPositionSignal.waitForUpdate(0.25);
+    var status17t = cancoder17tPositionSignal.waitForUpdate(0.25);
 
-    Supplier<Angle> enc10t = () -> cancoder10t.getAbsolutePosition().getValue();
-    Supplier<Angle> enc17t = () -> cancoder17t.getAbsolutePosition().getValue();
-
-    EasyCRTConfig crtConfig =
-        new EasyCRTConfig(enc10t, enc17t)
-            .withEncoderRatios(
-                TurretConstants.CANCODER_10T_TO_TURRET, TurretConstants.CANCODER_17T_TO_TURRET)
-            .withAbsoluteEncoderOffsets(
-                Rotations.of(-TurretConstants.CANCODER_10T_OFFSET_ROT),
-                Rotations.of(-TurretConstants.CANCODER_17T_OFFSET_ROT))
-            .withMechanismRange(Rotations.of(-1.0), Rotations.of(1.0))
-            .withMatchTolerance(Rotations.of(TurretConstants.CRT_MATCH_TOLERANCE_ROT))
-            .withAbsoluteEncoderInversions(false, false);
-
-    EasyCRT crt = new EasyCRT(crtConfig);
-    Optional<Angle> resolved = crt.getAngleOptional();
-
-    if (crt.getLastStatus() == CRTStatus.OK && resolved.isPresent()) {
-      double angleDeg = resolved.get().in(Degrees);
-      tryUntilOk(5, () -> motor.setPosition(angleDeg / 360.0));
-      crtResolveSucceeded = true;
-      crtResolvedAngleDeg = angleDeg;
-    } else {
-      DriverStation.reportError("[Turret] CRT resolve failed: " + crt.getLastStatus(), false);
-      tryUntilOk(5, () -> motor.setPosition(0.0));
+    if (status10t.getStatus() != StatusCode.OK || status17t.getStatus() != StatusCode.OK) {
+      needsCRTResolve = true;
       crtResolveSucceeded = false;
       crtResolvedAngleDeg = 0.0;
+      DriverStation.reportError("[Turret] Boot CRT skipped: CANcoder not ready", false);
+    } else {
+      Supplier<Angle> enc10t = () -> cancoder10tPositionSignal.getValue();
+      Supplier<Angle> enc17t = () -> cancoder17tPositionSignal.getValue();
+
+      EasyCRTConfig crtConfig =
+          new EasyCRTConfig(enc10t, enc17t)
+              .withEncoderRatios(
+                  TurretConstants.CANCODER_10T_TO_TURRET, TurretConstants.CANCODER_17T_TO_TURRET)
+              .withAbsoluteEncoderOffsets(
+                  Rotations.of(-TurretConstants.CANCODER_10T_OFFSET_ROT),
+                  Rotations.of(-TurretConstants.CANCODER_17T_OFFSET_ROT))
+              .withMechanismRange(Rotations.of(-1.0), Rotations.of(1.0))
+              .withMatchTolerance(Rotations.of(TurretConstants.CRT_MATCH_TOLERANCE_ROT))
+              .withAbsoluteEncoderInversions(false, false);
+
+      EasyCRT crt = new EasyCRT(crtConfig);
+      Optional<Angle> resolved = crt.getAngleOptional();
+
+      if (crt.getLastStatus() == CRTStatus.OK && resolved.isPresent()) {
+        double angleDeg = resolved.get().in(Degrees);
+        tryUntilOk(5, () -> motor.setPosition(angleDeg / 360.0));
+        motorSeeded = true;
+        crtResolveSucceeded = true;
+        crtResolvedAngleDeg = angleDeg;
+        needsCRTResolve = false;
+      } else {
+        DriverStation.reportError("[Turret] CRT resolve failed: " + crt.getLastStatus(), false);
+        crtResolveSucceeded = false;
+        crtResolvedAngleDeg = 0.0;
+        needsCRTResolve = true;
+      }
     }
   }
 
@@ -160,10 +172,55 @@ public class TurretIOKraken implements TurretIO {
     inputs.cancoder17tPositionRot = cancoder17tPositionSignal.getValueAsDouble();
     inputs.crtResolveSucceeded = crtResolveSucceeded;
     inputs.crtResolvedAngleDeg = crtResolvedAngleDeg;
+
+    if (needsCRTResolve) {
+      BaseStatusSignal.refreshAll(cancoder10tPositionSignal, cancoder17tPositionSignal);
+      if (cancoder10tPositionSignal.getStatus() == StatusCode.OK
+          && cancoder17tPositionSignal.getStatus() == StatusCode.OK) {
+        Supplier<Angle> enc10t = () -> cancoder10tPositionSignal.getValue();
+        Supplier<Angle> enc17t = () -> cancoder17tPositionSignal.getValue();
+
+        EasyCRTConfig crtConfig =
+            new EasyCRTConfig(enc10t, enc17t)
+                .withEncoderRatios(
+                    TurretConstants.CANCODER_10T_TO_TURRET, TurretConstants.CANCODER_17T_TO_TURRET)
+                .withAbsoluteEncoderOffsets(
+                    Rotations.of(-TurretConstants.CANCODER_10T_OFFSET_ROT),
+                    Rotations.of(-TurretConstants.CANCODER_17T_OFFSET_ROT))
+                .withMechanismRange(Rotations.of(-1.0), Rotations.of(1.0))
+                .withMatchTolerance(Rotations.of(TurretConstants.CRT_MATCH_TOLERANCE_ROT))
+                .withAbsoluteEncoderInversions(false, false);
+
+        EasyCRT crt = new EasyCRT(crtConfig);
+        Optional<Angle> resolved = crt.getAngleOptional();
+
+        if (crt.getLastStatus() == CRTStatus.OK && resolved.isPresent()) {
+          double angleDeg = resolved.get().in(Degrees);
+          if (!motorSeeded) {
+            tryUntilOk(5, () -> motor.setPosition(angleDeg / 360.0));
+            motorSeeded = true;
+          }
+          crtResolveSucceeded = true;
+          crtResolvedAngleDeg = angleDeg;
+          needsCRTResolve = false;
+          inputs.crtResolveSucceeded = true;
+          inputs.crtResolvedAngleDeg = angleDeg;
+        } else {
+          crtResolveSucceeded = false;
+          inputs.crtResolveSucceeded = false;
+        }
+      }
+    }
   }
 
   @Override
   public void setTargetAngleDeg(double angleDeg) {
     motor.setControl(motionMagicRequest.withPosition(angleDeg / 360.0));
+  }
+
+  @Override
+  public void triggerCRTResolve() {
+    needsCRTResolve = true;
+    motorSeeded = false;
   }
 }

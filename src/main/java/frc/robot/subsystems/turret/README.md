@@ -1,23 +1,72 @@
 # Turret Subsystem
 
 ## ⚙️ Overview
-The Turret subsystem provides absolute orientation control for the robot's scoring mechanism. It features a continuous-rotation turret driven by a Kraken X60 motor with a high-reduction gearbox. The system uses a dual-CANcoder "Chinese Remainder Theorem" (CRT) setup to resolve its absolute position at startup, allowing for precise heading control without the need for manual zeroing or limit switches.
+The Turret subsystem provides a rotating platform for the robot's scoring mechanism. It uses a high-performance Kraken X60 motor for precise positioning and two CANcoders on coprime pinions to resolve absolute position using the Chinese Remainder Theorem (CRT).
 
 ---
 
 ## 🔌 Hardware Mapping
 | Component | Hardware Type | CAN ID / Port | CAN Bus | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Turret Motor** | Kraken X60 (TalonFX) | `20` | `rio` | 32.5833:1 Reduction, MotionMagic control |
-| **CANcoder 10t** | CANcoder | `21` | `rio` | 10-tooth pinion (8.5:1 ratio to turret) |
-| **CANcoder 17t** | CANcoder | `22` | `rio` | 17-tooth pinion (5.0:1 ratio to turret) |
+| **Turret Motor** | Kraken X60 | `20` | `rio` | Main drive motor |
+| **Pinion 1 (10t)** | CANcoder | `21` | `rio` | Absolute feedback |
+| **Pinion 2 (17t)** | CANcoder | `22` | `rio` | Absolute feedback |
 
-*Note: CAN IDs are currently placeholders and must be assigned via Phoenix Tuner X.*
+### Gear Train
+- **Stage 1:** 12t → 46t
+- **Stage 2:** 10t → 85t (Main Gear)
+- **Overall Ratio:** 32.5833:1
+- **CRT Coverage:** 720° unique range via 10t and 17t coprime pinions on the 85t gear.
 
 ---
 
 ## 🏗️ Architecture & AdvantageKit
-This subsystem strictly follows the AdvantageKit 3-file IO pattern for hardware abstraction and log replay.
+This subsystem strictly follows the AdvantageKit 3-file IO pattern.
+* **Interface:** [TurretIO.java](TurretIO.java)
+* **Real Hardware:** [TurretIOKraken.java](TurretIOKraken.java)
+* **Simulation:** [TurretIOSim.java](TurretIOSim.java)
+* **Mechanism Notes:** Uses YAMS EasyCRT for absolute position resolution on boot.
+
+---
+
+## 🔄 State Machine & Flow
+The turret initializes by resolving its absolute position via two CANcoders. If resolution fails, it can be re-triggered manually.
+
+```mermaid
+stateDiagram-v2
+    [*] --> WaitingForSignals : Robot init
+    WaitingForSignals --> ResolvingCRT : All CANcoder signals valid debounced
+    ResolvingCRT --> Resolved : EasyCRT returns valid angle
+    ResolvingCRT --> ResolveFailed : EasyCRT returns empty / error
+    ResolveFailed --> ResolvingCRT : retryCRTResolveCommand triggered
+    Resolved --> Running : TalonFX seeded
+    Running --> Running : periodic position control
+```
+
+---
+
+## 🎮 Command API (Public Methods)
+These are the primary Command factories exposed to RobotContainer.java for button bindings:
+* **getOrientationDeg():** Returns the current measured turret angle in degrees.
+* **setAbsoluteOrientationCommand(angleDeg):** Moves the turret to a specific absolute angle.
+* **setRelativeOrientationCommand(deltaDeg):** Offsets the current target by a specific amount.
+* **retryCRTResolveCommand():** Re-triggers the CRT resolution process (useful if sensors were offline at boot).
+
+---
+
+## 🧪 Testing & Simulation Requirements
+* **JUnit Tests:** Currently not implemented (See TODO).
+* **Sim Behavior:** [TurretIOSim.java](TurretIOSim.java) uses `DCMotorSim` and `PIDController` with `SIM_kP/kI/kD` gains to emulate physics. Visualization is provided via `Mechanism2d` and `Pose3d` logs.
+
+---
+
+## Any Additional Notes
+* **Constants TODOs:** Several constants in `Constants.java` require hardware tuning:
+    * Tune `kP/kD` for real hardware (currently estimated).
+    * Calibrate `ZERO_OFFSET_DEG`.
+    * Set specific CANcoder offsets once mounted.
+* **Alerts:** The subsystem logs alerts if CRT resolution fails on boot.
+
 * **Interface:** [TurretIO.java](src/main/java/frc/robot/subsystems/turret/TurretIO.java)
 * **Real Hardware:** [TurretIOKraken.java](src/main/java/frc/robot/subsystems/turret/TurretIOKraken.java)
 * **Simulation:** [TurretIOSim.java](src/main/java/frc/robot/subsystems/turret/TurretIOSim.java)
